@@ -9,3 +9,10 @@ dependencies = [
     "numpy>=2.0.2",
     "transformers>=4.57.3",
 ]
+
+[tool.uv]
+# require support for Intel macOS
+required-environments = [
+  "sys_platform == 'darwin' and platform_machine == 'x86_64'"
+]
+
