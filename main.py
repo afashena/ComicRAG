@@ -24,6 +24,8 @@ from transformers import CLIPModel, CLIPProcessor
 # Optional local text embedder (E5)
 from transformers import AutoTokenizer, AutoModel
 
+from util import ensure_dir
+
 # Optional OpenAI embeddings + LLM
 try:
     from openai import OpenAI  # new OpenAI python client
@@ -44,16 +46,6 @@ E5_MODEL = "intfloat/e5-large-v2"
 N_TEXT = 5
 N_IMAGE = 5
 N_TOTAL = 10
-
-# -----------------------
-# Utilities
-# -----------------------
-def ensure_dir(d):
-    os.makedirs(d, exist_ok=True)
-
-def image_to_b64(path: str) -> str:
-    with open(path, "rb") as f:
-        return base64.b64encode(f.read()).decode("utf-8")
 
 # -----------------------
 # Load CLIP (image encoder + text tower for visual query)
