@@ -11,21 +11,27 @@ from chromadb.utils.embedding_functions import OpenCLIPEmbeddingFunction
 
 from dotenv import load_dotenv
 from openai import OpenAI
+import torch
 
 from util import ensure_dir, image_to_b64
 
-CHROMA_DB_PATH = Path("./chroma_image_db")
+from make_db import E5SmallTextEmbedder, QwenImageEmbedder, QwenTextEmbedder
+
+CHROMA_DB_PATH = Path("./e5_caption_chroma_image_db")
+
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 # Retrieval sizes
 N_TEXT = 5
-N_IMAGE = 10
+N_IMAGE = 20
 N_TOTAL = 10
 
 def retrieve(question: str, collection: Collection, top_text=N_TEXT, top_image=N_IMAGE, max_total=N_TOTAL) -> List[Dict]:
 
     query_result = collection.query(
             query_texts=[question], # Chroma embeds this text
-            n_results=top_image         # Returns top 3 results
+            n_results=top_image,         # Returns top results
+            where={"field": "image"}
         )
     
     image_hits = []
@@ -56,7 +62,7 @@ def llm_answer(question: str, candidates: List[Dict], openai_client=None) -> str
     for c in candidates:
         #context_blocks.append(f"PanelID: {c['panel_id']}\nImagePath: {c.get('image_path')}\n")
         text_img_pair = []
-        text_img_pair.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_to_b64(c['image_path'])}", "detail": "auto"}})
+        text_img_pair.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_to_b64(c['source_img'])}", "detail": "auto"}})
         text_img_pair.append({"type": "text", "text": f"PanelID: {c['panel_id']}"})
         context_blocks.extend(text_img_pair)
 
@@ -81,7 +87,7 @@ if __name__ == "__main__":
     client = PersistentClient(path=CHROMA_DB_PATH)
 
     # create/get image collection
-    image_db = client.get_or_create_collection(name="panel_image", embedding_function=OpenCLIPEmbeddingFunction(device='cpu'))
+    image_db = client.get_or_create_collection(name="panel_image", embedding_function=E5SmallTextEmbedder())
 
     user_query = input("Enter your question about the comic panels: ")
 
