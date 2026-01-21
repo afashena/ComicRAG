@@ -24,7 +24,7 @@ from transformers import CLIPModel, CLIPProcessor
 # Optional local text embedder (E5)
 from transformers import AutoTokenizer, AutoModel
 
-from util import ensure_dir
+from utils.util import ensure_dir
 
 # Optional OpenAI embeddings + LLM
 try:

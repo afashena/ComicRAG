@@ -16,7 +16,7 @@ from sentence_transformers import SentenceTransformer
 
 from PIL import Image
 
-from util import ensure_dir
+from utils.util import ensure_dir
 
 # -----------------------
 # Config

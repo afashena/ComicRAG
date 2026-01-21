@@ -13,9 +13,9 @@ from dotenv import load_dotenv
 from openai import OpenAI
 import torch
 
-from util import ensure_dir, image_to_b64
+from utils.util import ensure_dir, image_to_b64
 
-from make_db import E5SmallTextEmbedder, QwenImageEmbedder, QwenTextEmbedder
+from database.make_db import E5SmallTextEmbedder, QwenImageEmbedder, QwenTextEmbedder
 
 CHROMA_DB_PATH = Path("./e5_caption_chroma_image_db")
 
