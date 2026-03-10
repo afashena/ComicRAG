@@ -35,7 +35,7 @@ Return an updated summary which summarizes the story events up to this point.
 
 Before finishing, check if the summary makes sense and, if not, revise it to ensure consistency with the new caption."""
 
-describe_panel = """Describe this comic panel image, focusing on characters, actions, dialogue, and setting.
+describe_panel = """You are an expert comic book panel captioner. Describe this comic panel image, focusing on characters, actions, dialogue, and setting.
     Only describe what is visible in the image."""
 
 describe_panel_w_history = """Revise your description of this comic panel image to ensure it is consistent with the story so far. Here is a summary of the story so far: {summary}. 

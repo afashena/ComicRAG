@@ -3,14 +3,13 @@
 # -----------------------
 import json
 from pathlib import Path
-from typing import Any, Dict, List
+import re
+from typing import List
 
 from chromadb import Documents, EmbeddingFunction, Embeddings, PersistentClient
-from chromadb.utils.data_loaders import ImageLoader
-from chromadb.utils.embedding_functions import OpenCLIPEmbeddingFunction
 
 from tqdm import tqdm
-from transformers import AutoModel, AutoProcessor, CLIPModel, CLIPProcessor, Qwen2_5_VLForConditionalGeneration
+from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
 import torch
 from sentence_transformers import SentenceTransformer
 
@@ -24,30 +23,6 @@ from utils.util import ensure_dir
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"Using device: {DEVICE}")
 CHROMA_DB_PATH = Path("./e5_caption_chroma_image_db")
-#CLIP_MODEL = "laion/CLIP-ViT-bigG-14-laion2B-39B-b160k"  # recommended image embedder (OpenCLIP bigG)
-
-# -----------------------
-# Load CLIP (image encoder + text tower for visual query)
-# -----------------------
-# print("Loading CLIP image model:", CLIP_MODEL)
-# clip = CLIPModel.from_pretrained(CLIP_MODEL).to(DEVICE)
-# clip_processor = CLIPProcessor.from_pretrained(CLIP_MODEL)
-
-# def embed_image(path: str) -> List[float]:
-#     img = Image.open(path).convert("RGB")
-#     inputs = clip_processor(images=img, return_tensors="pt").to(DEVICE)
-#     with torch.no_grad():
-#         feat = clip.get_image_features(**inputs)  # shape (1, D)
-#     feat = feat / feat.norm(dim=-1, keepdim=True)
-#     return feat.cpu().numpy()[0].tolist()
-
-# def embed_clip_text(text: str) -> List[float]:
-#     # Use CLIP text encoder to obtain vector in CLIP image-text space
-#     inputs = clip_processor(text=[text], return_tensors="pt", padding=True, truncation=True).to(DEVICE)
-#     with torch.no_grad():
-#         feat = clip.get_text_features(**inputs)
-#     feat = feat / feat.norm(dim=-1, keepdim=True)
-#     return feat.cpu().numpy()[0].tolist()
 
 class QwenImageEmbedder(EmbeddingFunction):
 
@@ -209,8 +184,54 @@ def make_panel_db(caption_dir: Path, image_dir: Path):
 
     print(f"Image database created at {CHROMA_DB_PATH} with {image_db.count()} images.")
 
+def make_refined_panel_db(refined_captions_path: Path, image_dir: Path):
+    ensure_dir(CHROMA_DB_PATH)
+    client = PersistentClient(path=CHROMA_DB_PATH)
+
+    # create/get collection for refined captions
+    panel_db = client.get_or_create_collection(name="refined_panel_captions", 
+                    embedding_function=E5SmallTextEmbedder())
+    
+    # Load the refined captions JSON
+    with open(refined_captions_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    
+    captions = data.get("refined_captions", [])
+    
+    for caption in tqdm(captions, desc="Indexing refined captions"):
+        # Parse PAGE and PANEL numbers using regex
+        match = re.match(r"\s*PAGE (\d+) PANEL (\d+): (.*)", caption, re.DOTALL)
+        if match:
+            page_num = int(match.group(1))
+            panel_num = int(match.group(2))
+            description = match.group(3).strip()
+            
+            # Construct ID and image path
+            panel_id = f"page{page_num}_panel{panel_num}"
+            image_path = image_dir / f"{panel_id}.jpg"  # Adjust extension if needed (e.g., .png)
+            
+            try:
+                panel_db.add(
+                    documents=[caption],  # Use the full caption string as the document
+                    ids=[panel_id],
+                    metadatas=[{
+                        "panel_id": panel_id,
+                        "page": page_num,
+                        "panel": panel_num,
+                        "field": "refined_caption",
+                        "source_img": str(image_path)
+                    }]
+                )
+            except Exception as e:
+                print(f"Failed to add caption for {panel_id}: {e}")
+        else:
+            print(f"Could not parse caption: {caption[:50]}...")
+
+    print(f"Refined captions database created at {CHROMA_DB_PATH} with {panel_db.count()} captions.")
+
 
 if __name__ == "__main__":
     caption_dir = Path(r"C:\Users\BabyBunny\Documents\Data\test_for_captioning\panel_captions")
     image_dir = Path(r"C:\Users\BabyBunny\Documents\Data\test_for_captioning\images")
-    make_panel_db(caption_dir=caption_dir, image_dir=image_dir)
+    #make_panel_db(caption_dir=caption_dir, image_dir=image_dir)
+    make_refined_panel_db(refined_captions_path=Path(r"C:\Users\BabyBunny\Documents\Data\test_for_captioning\panel_captions_openai_dialogue_refined\refined_captions.json"), image_dir=image_dir)
