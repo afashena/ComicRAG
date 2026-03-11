@@ -29,5 +29,17 @@
             "console": "integratedTerminal",
             "args": ""
         },
+        {
+            "name": "App",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/app.py",
+            "cwd": "${workspaceFolder}",
+            "env": {
+                    "PYTHONPATH": "${workspaceFolder}"
+                },
+            "console": "integratedTerminal",
+            "args": ""
+        },
     ]
 }

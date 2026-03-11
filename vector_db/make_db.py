@@ -207,7 +207,7 @@ def make_refined_panel_db(refined_captions_path: Path, image_dir: Path):
             description = match.group(3).strip()
             
             # Construct ID and image path
-            panel_id = f"page{page_num}_panel{panel_num}"
+            panel_id = f"{page_num}_{panel_num}"
             image_path = image_dir / f"{panel_id}.jpg"  # Adjust extension if needed (e.g., .png)
             
             try:

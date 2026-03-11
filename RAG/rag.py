@@ -15,7 +15,7 @@ import torch
 
 from utils.util import ensure_dir, image_to_b64
 
-from database.make_db import E5SmallTextEmbedder, QwenImageEmbedder, QwenTextEmbedder
+from vector_db.make_db import E5SmallTextEmbedder, QwenImageEmbedder, QwenTextEmbedder
 
 CHROMA_DB_PATH = Path("./e5_caption_chroma_image_db")
 
@@ -31,7 +31,7 @@ def retrieve(question: str, collection: Collection, top_text=N_TEXT, top_image=N
     query_result = collection.query(
             query_texts=[question], # Chroma embeds this text
             n_results=top_image,         # Returns top results
-            where={"field": "image"}
+            where={"field": "refined_caption"}
         )
     
     image_hits = []
