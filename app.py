@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 import gradio as gr
 from dotenv import load_dotenv
@@ -9,8 +10,6 @@ from utils.util import ensure_dir
 from vector_db.make_db import E5SmallTextEmbedder
 import RAG.rag as rag
 
-CHROMA_DB_PATH = Path("./e5_caption_chroma_image_db")
-
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 # Retrieval sizes
@@ -18,11 +17,11 @@ N_TEXT = 5
 N_IMAGE = 20
 N_TOTAL = 10
 
-def get_answer(question: str) -> str:
+def get_answer(question: str) -> tuple[str, str]:
 
     # Initialize ChromaDB client and collection
-    ensure_dir(CHROMA_DB_PATH)
-    chroma_client = PersistentClient(path=CHROMA_DB_PATH)
+    ensure_dir(os.environ["CHROMA_DB_PATH"])
+    chroma_client = PersistentClient(path=os.environ["CHROMA_DB_PATH"])
 
     # create/get image collection
     image_db = chroma_client.get_or_create_collection(name="refined_panel_captions", embedding_function=E5SmallTextEmbedder())
@@ -32,7 +31,13 @@ def get_answer(question: str) -> str:
     openai_client = OpenAI()
 
     answer = rag.llm_answer(question, candidates, openai_client=openai_client)
-    return answer
+
+    for cand_dict in candidates:
+        if Path(cand_dict["source_img"]).stem == answer.page_panel:  # Adjust extension if needed
+            top_image_path = cand_dict["source_img"]
+            break
+
+    return answer.answer_text, top_image_path
 
 
 
@@ -42,10 +47,11 @@ def main():
         with gr.Row():
             question_input = gr.Textbox(label="Enter your question about the comic panels:")
             answer_output = gr.Textbox(label="Answer:", interactive=False)
+            image_output = gr.Image(label="Top Image", interactive=False)
         submit_btn = gr.Button("Get Answer")
-        submit_btn.click(fn=get_answer, inputs=question_input, outputs=answer_output)
+        submit_btn.click(fn=get_answer, inputs=question_input, outputs=[answer_output, image_output])
 
-    demo.launch()
+    demo.launch(allowed_paths=[os.environ["PANEL_DIR"]])
     return
 
 if __name__ == "__main__":

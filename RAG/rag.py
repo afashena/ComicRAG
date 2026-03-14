@@ -11,13 +11,12 @@ from chromadb.utils.embedding_functions import OpenCLIPEmbeddingFunction
 
 from dotenv import load_dotenv
 from openai import OpenAI
+from pydantic import BaseModel, Field, ValidationError
 import torch
 
 from utils.util import ensure_dir, image_to_b64
 
 from vector_db.make_db import E5SmallTextEmbedder, QwenImageEmbedder, QwenTextEmbedder
-
-CHROMA_DB_PATH = Path("./e5_caption_chroma_image_db")
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -25,6 +24,45 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 N_TEXT = 5
 N_IMAGE = 20
 N_TOTAL = 10
+
+class Answer(BaseModel):
+    page_panel: str = Field(description="The string identifier for the panel that best answers the user's question in the format '{page_num}_{panel_num}', e.g., '1_3' for page 1 panel 3.")
+    answer_text: str = Field(description="The answer to the user's question based on the content of the panel. This should be a concise summary that directly addresses the question, using information from the panel's image and caption. If the answer is not known, this should be 'I don't know.' followed by a brief description of what happens in the panel.")
+
+def enforce_no_additional_properties(schema: dict) -> dict:
+        """
+        Recursively enforce additionalProperties=false
+        on all object schemas (OpenAI strict requirement)
+        """
+        if not isinstance(schema, dict):
+            return schema
+
+        schema_type = schema.get("type")
+
+        if schema_type == "object":
+            schema["additionalProperties"] = False
+
+            for prop in schema.get("properties", {}).values():
+                enforce_no_additional_properties(prop)
+
+            # Required for OpenAI: explicitly define required
+            if "required" not in schema and "properties" in schema:
+                schema["required"] = list(schema["properties"].keys())
+
+        elif schema_type == "array":
+            schema = enforce_no_additional_properties(schema.get("items"))
+
+        # Handle anyOf / oneOf / allOf (rare but safe)
+        for key in ("anyOf", "oneOf", "allOf"):
+            if key in schema:
+                for subschema in schema[key]:
+                    schema = enforce_no_additional_properties(subschema)
+
+        if "$defs" in schema:
+            for def_schema in schema["$defs"].values():
+                schema = enforce_no_additional_properties(def_schema)
+
+        return schema
 
 def retrieve(question: str, collection: Collection, top_text=N_TEXT, top_image=N_IMAGE, max_total=N_TOTAL) -> List[Dict]:
 
@@ -47,6 +85,9 @@ def retrieve(question: str, collection: Collection, top_text=N_TEXT, top_image=N
 # Compose LLM prompt and query LLM (example using OpenAI Chat if available)
 # -----------------------
 def llm_answer(question: str, candidates: List[Dict], openai_client=None) -> str:
+
+    schema = Answer.model_json_schema()
+    schema = enforce_no_additional_properties(schema)
 
     prompt = f"""You are an archivist for a comic panel database. 
     Answer the user's question using ONLY the following candidate panels (cite PanelID if you reference it).
@@ -72,9 +113,25 @@ def llm_answer(question: str, candidates: List[Dict], openai_client=None) -> str
         resp = openai_client.chat.completions.create(
             model="gpt-4o",
             messages=[{"role":"user","content":context_blocks}],
+            response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "Answer",
+                        "schema": schema,
+                        "strict": True
+                        }
+                },
             temperature=0.0
         )
-        return resp.choices[0].message.content
+
+        try:
+            # Validate and parse JSON → Pydantic object
+            parsed = Answer.model_validate_json(resp.choices[0].message.content)
+            return parsed
+
+        except ValidationError as e:
+            print("[WARN] JSON validation failed:", e)
+            print("Raw output was:", resp.choices[0].message.content)
     else:
         # If OpenAI LLM not available, return prompt + context (you can paste to any LLM).
         return prompt
@@ -83,8 +140,8 @@ if __name__ == "__main__":
                         
     load_dotenv()  # load environment variables from .env file
     #get collection
-    ensure_dir(CHROMA_DB_PATH)
-    client = PersistentClient(path=CHROMA_DB_PATH)
+    ensure_dir(os.environ["CHROMA_DB_PATH"])
+    client = PersistentClient(path=os.environ["CHROMA_DB_PATH"])
 
     # create/get image collection
     image_db = client.get_or_create_collection(name="panel_image", embedding_function=E5SmallTextEmbedder())

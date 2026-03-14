@@ -2,12 +2,14 @@
 # Indexing function (data_list uses GT text)
 # -----------------------
 import json
+import os
 from pathlib import Path
 import re
 from typing import List
 
 from chromadb import Documents, EmbeddingFunction, Embeddings, PersistentClient
 
+from dotenv import load_dotenv
 from tqdm import tqdm
 from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
 import torch
@@ -22,7 +24,6 @@ from utils.util import ensure_dir
 # -----------------------
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"Using device: {DEVICE}")
-CHROMA_DB_PATH = Path("./e5_caption_chroma_image_db")
 
 class QwenImageEmbedder(EmbeddingFunction):
 
@@ -119,11 +120,12 @@ class E5SmallTextEmbedder(EmbeddingFunction):
         with torch.no_grad():
             emb = self.model.encode([input], convert_to_numpy=True, show_progress_bar=False)[0]
         return emb.tolist()
+    
 
-
+## NOT CURRENTLY NEEDED
 def make_image_db(image_dir: Path):
-    ensure_dir(CHROMA_DB_PATH)
-    client = PersistentClient(path=CHROMA_DB_PATH)
+    ensure_dir(os.environ["CHROMA_DB_PATH"])
+    client = PersistentClient(path=os.environ["CHROMA_DB_PATH"])
 
     # create/get image collection
     image_db = client.get_or_create_collection(name="panel_image", 
@@ -143,11 +145,11 @@ def make_image_db(image_dir: Path):
             except Exception as e: 
                 print(f"Failed to add image {panel}: {e}")
 
-    print(f"Image database created at {CHROMA_DB_PATH} with {image_db.count()} images.")
+    print(f"Image database created at {os.environ['CHROMA_DB_PATH']} with {image_db.count()} images.")
 
 def make_panel_db(caption_dir: Path, image_dir: Path):
-    ensure_dir(CHROMA_DB_PATH)
-    client = PersistentClient(path=CHROMA_DB_PATH)
+    ensure_dir(os.environ["CHROMA_DB_PATH"])
+    client = PersistentClient(path=os.environ["CHROMA_DB_PATH"])
 
     # create/get image collection
     image_db = client.get_or_create_collection(name="panel_image", 
@@ -182,56 +184,62 @@ def make_panel_db(caption_dir: Path, image_dir: Path):
             except Exception as e: 
                 print(f"Failed to add image {panel}: {e}")
 
-    print(f"Image database created at {CHROMA_DB_PATH} with {image_db.count()} images.")
+    print(f"Image database created at {os.environ['CHROMA_DB_PATH']} with {image_db.count()} images.")
 
-def make_refined_panel_db(refined_captions_path: Path, image_dir: Path):
-    ensure_dir(CHROMA_DB_PATH)
-    client = PersistentClient(path=CHROMA_DB_PATH)
+class ComicVectorDB:
+    def __init__(self, db_path: Path, image_dir: Path, refined_captions_path: Path):
+        ensure_dir(db_path)
+        self.client = PersistentClient(path=db_path)
+        self.image_dir = image_dir
+        self.refined_captions_path = refined_captions_path
 
-    # create/get collection for refined captions
-    panel_db = client.get_or_create_collection(name="refined_panel_captions", 
-                    embedding_function=E5SmallTextEmbedder())
-    
-    # Load the refined captions JSON
-    with open(refined_captions_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    
-    captions = data.get("refined_captions", [])
-    
-    for caption in tqdm(captions, desc="Indexing refined captions"):
-        # Parse PAGE and PANEL numbers using regex
-        match = re.match(r"\s*PAGE (\d+) PANEL (\d+): (.*)", caption, re.DOTALL)
-        if match:
-            page_num = int(match.group(1))
-            panel_num = int(match.group(2))
-            description = match.group(3).strip()
-            
-            # Construct ID and image path
-            panel_id = f"{page_num}_{panel_num}"
-            image_path = image_dir / f"{panel_id}.jpg"  # Adjust extension if needed (e.g., .png)
-            
-            try:
-                panel_db.add(
-                    documents=[caption],  # Use the full caption string as the document
-                    ids=[panel_id],
-                    metadatas=[{
-                        "panel_id": panel_id,
-                        "page": page_num,
-                        "panel": panel_num,
-                        "field": "refined_caption",
-                        "source_img": str(image_path)
-                    }]
-                )
-            except Exception as e:
-                print(f"Failed to add caption for {panel_id}: {e}")
-        else:
-            print(f"Could not parse caption: {caption[:50]}...")
+    def make_refined_panel_db(self):
 
-    print(f"Refined captions database created at {CHROMA_DB_PATH} with {panel_db.count()} captions.")
+        # create/get collection for refined captions
+        panel_db = self.client.get_or_create_collection(name="refined_panel_captions", 
+                        embedding_function=E5SmallTextEmbedder())
+        
+        # Load the refined captions JSON
+        with open(self.refined_captions_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        
+        captions = data.get("refined_captions", [])
+        
+        for caption in tqdm(captions, desc="Indexing refined captions"):
+            # Parse PAGE and PANEL numbers using regex
+            match = re.match(r"\s*PAGE (\d+) PANEL (\d+): (.*)", caption, re.DOTALL)
+            if match:
+                page_num = int(match.group(1))
+                panel_num = int(match.group(2))
+                description = match.group(3).strip()
+                
+                # Construct ID and image path
+                panel_id = f"{page_num}_{panel_num}"
+                image_path = image_dir / f"{panel_id}.jpg"  # Adjust extension if needed (e.g., .png)
+                
+                try:
+                    panel_db.add(
+                        documents=[caption],  # Use the full caption string as the document
+                        ids=[panel_id],
+                        metadatas=[{
+                            "panel_id": panel_id,
+                            "page": page_num,
+                            "panel": panel_num,
+                            "field": "refined_caption",
+                            "source_img": str(image_path)
+                        }]
+                    )
+                except Exception as e:
+                    print(f"Failed to add caption for {panel_id}: {e}")
+            else:
+                print(f"Could not parse caption: {caption[:50]}...")
+
+        print(f"Refined captions database created at {os.environ['CHROMA_DB_PATH']} with {panel_db.count()} captions.")
 
 
 if __name__ == "__main__":
-    caption_dir = Path(r"C:\Users\BabyBunny\Documents\Data\test_for_captioning\panel_captions")
-    image_dir = Path(r"C:\Users\BabyBunny\Documents\Data\test_for_captioning\images")
-    #make_panel_db(caption_dir=caption_dir, image_dir=image_dir)
-    make_refined_panel_db(refined_captions_path=Path(r"C:\Users\BabyBunny\Documents\Data\test_for_captioning\panel_captions_openai_dialogue_refined\refined_captions.json"), image_dir=image_dir)
+    load_dotenv()  # load environment variables from .env file
+    image_dir = Path(os.environ["PANEL_DIR"])
+    caption_dir = image_dir.parent / "panel_captions"  
+    comic_db = ComicVectorDB(db_path=Path(os.environ["CHROMA_DB_PATH"]), image_dir=image_dir, refined_captions_path=Path(caption_dir / "refined_captions.json"))
+    comic_db.make_refined_panel_db()
