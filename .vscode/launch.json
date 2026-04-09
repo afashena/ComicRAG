@@ -41,5 +41,17 @@
             "console": "integratedTerminal",
             "args": ""
         },
+        {
+            "name": "Test RAG",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/RAG/rag.py",
+            "cwd": "${workspaceFolder}",
+            "env": {
+                    "PYTHONPATH": "${workspaceFolder}"
+                },
+            "console": "integratedTerminal",
+            "args": ""
+        },
     ]
 }

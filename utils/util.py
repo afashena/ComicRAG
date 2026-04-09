@@ -4,7 +4,7 @@ import re
 
 
 def ensure_dir(d):
-    Path.mkdir(d, exist_ok=True)
+    Path.mkdir(Path(d), exist_ok=True)
 
 def image_to_b64(path: str) -> str:
     with open(path, "rb") as f:

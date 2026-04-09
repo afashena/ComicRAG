@@ -17,39 +17,40 @@ N_TEXT = 5
 N_IMAGE = 20
 N_TOTAL = 10
 
-def get_answer(question: str) -> tuple[str, str]:
+class RagAnswerer():
+    def __init__(self):
+        ensure_dir(os.environ["CHROMA_DB_PATH"])
+        self.chroma_client = PersistentClient(path=os.environ["CHROMA_DB_PATH"])
+        self.image_db = self.chroma_client.get_or_create_collection(name="refined_panel_captions", embedding_function=E5SmallTextEmbedder())
 
-    # Initialize ChromaDB client and collection
-    ensure_dir(os.environ["CHROMA_DB_PATH"])
-    chroma_client = PersistentClient(path=os.environ["CHROMA_DB_PATH"])
+    def get_answer(self, question: str) -> tuple[str, str]:
 
-    # create/get image collection
-    image_db = chroma_client.get_or_create_collection(name="refined_panel_captions", embedding_function=E5SmallTextEmbedder())
+        candidates = rag.retrieve(question, collection=self.image_db, top_image=N_IMAGE)
 
-    candidates = rag.retrieve(question, collection=image_db, top_text=N_TEXT, top_image=N_IMAGE, max_total=N_TOTAL)
+        reranked = rag.rerank_candidates(question, candidates)
 
-    openai_client = OpenAI()
+        openai_client = OpenAI()
 
-    answer = rag.llm_answer(question, candidates, openai_client=openai_client)
+        answer = rag.llm_answer(question, reranked, openai_client=openai_client)
 
-    for cand_dict in candidates:
-        if Path(cand_dict["source_img"]).stem == answer.page_panel:  # Adjust extension if needed
-            top_image_path = cand_dict["source_img"]
-            break
+        for _, _, candidate_meta in reranked:
+            if Path(candidate_meta["source_img"]).stem == answer.page_panel:  # Adjust extension if needed
+                top_image_path = candidate_meta["source_img"]
+                break
 
-    return answer.answer_text, top_image_path
+        return answer.answer_text, top_image_path
 
 
 
-def main():
+def main(rag_answerer: RagAnswerer):
     with gr.Blocks() as demo:
-        gr.Markdown("## Comic Panel Q&A")
+        gr.Markdown("## ⚡ComicRAG: A Retrieval-Augmented Generation System for Comic Panels")
         with gr.Row():
             question_input = gr.Textbox(label="Enter your question about the comic panels:")
             answer_output = gr.Textbox(label="Answer:", interactive=False)
             image_output = gr.Image(label="Top Image", interactive=False)
         submit_btn = gr.Button("Get Answer")
-        submit_btn.click(fn=get_answer, inputs=question_input, outputs=[answer_output, image_output])
+        submit_btn.click(fn=rag_answerer.get_answer, inputs=question_input, outputs=[answer_output, image_output])
 
     demo.launch(allowed_paths=[os.environ["PANEL_DIR"]])
     return
@@ -57,4 +58,6 @@ def main():
 if __name__ == "__main__":
     load_dotenv()
 
-    main()
+    rag_answerer = RagAnswerer()
+
+    main(rag_answerer)
