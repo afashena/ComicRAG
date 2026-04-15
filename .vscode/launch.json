@@ -101,5 +101,17 @@
             "console": "integratedTerminal",
             "args": ""
         },
+        {
+            "name": "Evaluate Finetuned Model",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/captioner/finetuning/evaluate_model.py",
+            "cwd": "${workspaceFolder}",
+            "env": {
+                    "PYTHONPATH": "${workspaceFolder}"
+                },
+            "console": "integratedTerminal",
+            "args": ""
+        },
     ]
 }

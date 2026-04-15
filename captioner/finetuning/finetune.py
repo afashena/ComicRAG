@@ -397,14 +397,27 @@ def load_finetuned_model(adapter_path: str):
 
     processor = AutoProcessor.from_pretrained(adapter_path, trust_remote_code=True)
 
+    # Use 4-bit quantization to match baseline model and save memory
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.bfloat16,
+        bnb_4bit_use_double_quant=True,
+    )
+
     base_model = AutoModelForImageTextToText.from_pretrained(
         MODEL_PATH,
-        torch_dtype=torch.bfloat16,
+        quantization_config=bnb_config,
         device_map="cuda:0",
+        low_cpu_mem_usage=True,
         trust_remote_code=True,
     )
 
     model = PeftModel.from_pretrained(base_model, adapter_path)
+    
+    # Merge LoRA adapters into the base model for faster inference
+    model = model.merge_and_unload()
+    
     model.eval()
 
     return model, processor

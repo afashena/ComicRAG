@@ -15,11 +15,6 @@ from pydantic import BaseModel
 from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
 from qwen_vl_utils import process_vision_info
 
-print(transformers.__version__)
-print(bitsandbytes.__version__)
-print(transformers.__file__)
-print(bitsandbytes.__file__)
-
 MODEL_PATH = Path(r"C:\Users\BabyBunny\Documents\Models\qwen2.5-vl-3b-instruct")
 
 
@@ -185,26 +180,28 @@ def caption_image(
     # This is Qwen-specific and required — do not skip it
     image_inputs, video_inputs = process_vision_info(messages)
 
-    inputs = processor(
-        text=[text],
-        images=image_inputs,
-        videos=video_inputs,
-        return_tensors="pt",
-        padding=True,
-    ).to(model.device)
-
-    input_len = inputs["input_ids"].shape[-1]
-
+    # Wrap entire inference in torch.inference_mode for maximum speed
+    # This disables gradient computation and enables optimizations
     with torch.inference_mode():
+        inputs = processor(
+            text=[text],
+            images=image_inputs,
+            videos=video_inputs,
+            return_tensors="pt",
+            padding=True,
+        ).to(model.device)
+
+        input_len = inputs["input_ids"].shape[-1]
+
         generated_ids = model.generate(
             **inputs,
             max_new_tokens=max_new_tokens,
             do_sample=False,   # greedy — deterministic, better for structured output
         )
 
-    # Trim the prompt tokens from the output — decode only what was generated
-    trimmed = generated_ids[0][input_len:]
-    raw_output = processor.decode(trimmed, skip_special_tokens=True).strip()
+        # Trim the prompt tokens from the output — decode only what was generated
+        trimmed = generated_ids[0][input_len:]
+        raw_output = processor.decode(trimmed, skip_special_tokens=True).strip()
 
     if schema is None:
         return raw_output
@@ -249,25 +246,9 @@ if __name__ == "__main__":
     load_dotenv()
 
     # Your comic panel schema
-    class PanelType(str, Enum):
-        establishing = "establishing"
-        action = "action"
-        reaction = "reaction"
-        dialogue = "dialogue"
-        close_up = "close_up"
-        transition = "transition"
-        splash = "splash"
-
     class ComicPanelCaption(BaseModel):
         description: str = Field(
             description=("Without knowing or making up narrative elements which are not in the panel, describe the setting, characters, and events evident in this comic panel as if you were telling a prose narrative."))
-        # panel_type: PanelType
-        # characters: List[str]
-        # dialogue: List[str]
-        # setting: str
-        # tags: List[str]
-        # description: str
-        # continues_from: Optional[str] = Field(default=None)
 
     # Load once
     model, processor = load_qwen(use_4bit=True)
