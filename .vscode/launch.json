@@ -53,5 +53,53 @@
             "console": "integratedTerminal",
             "args": ""
         },
+        {
+            "name": "Test Gemma Caption",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/captioner/generate_caption_gemma.py",
+            "cwd": "${workspaceFolder}",
+            "env": {
+                    "PYTHONPATH": "${workspaceFolder}"
+                },
+            "console": "integratedTerminal",
+            "args": ""
+        },
+        {
+            "name": "Make Finetuning Set",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/captioner/finetuning/data/get_data_to_label.py",
+            "cwd": "${workspaceFolder}",
+            "env": {
+                    "PYTHONPATH": "${workspaceFolder}"
+                },
+            "console": "integratedTerminal",
+            "args": ""
+        },
+        {
+            "name": "Test Qwen Caption",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/captioner/generate_caption_qwen.py",
+            "cwd": "${workspaceFolder}",
+            "env": {
+                    "PYTHONPATH": "${workspaceFolder}"
+                },
+            "console": "integratedTerminal",
+            "args": ""
+        },
+        {
+            "name": "Finetune Qwen",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/captioner/finetuning/finetune.py",
+            "cwd": "${workspaceFolder}",
+            "env": {
+                    "PYTHONPATH": "${workspaceFolder}"
+                },
+            "console": "integratedTerminal",
+            "args": ""
+        },
     ]
 }

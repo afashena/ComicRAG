@@ -12,7 +12,6 @@ from openai import OpenAI
 from pydantic import BaseModel, ValidationError, Field
 from ollama import chat, Client
 from PIL import Image
-from sqlalchemy import text
 print(os.getcwd())
 
 # -----------------------------
