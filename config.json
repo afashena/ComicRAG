@@ -1,4 +1,5 @@
-{
+{   "model_path": "C:/Users/BabyBunny/Documents/Models/qwen2.5-vl-3b-instruct",
+    "train_dir": "C:/Users/BabyBunny/Documents/Data/test_finetune/merged_train",
     "lora_config": {
         "r": 8,
         "lora_alpha": 16, 
@@ -10,9 +11,9 @@
         "task_type": "CAUSAL_LM"
     },
     "sft_config": {
-        "output_dir": "./lora_output",
+        "output_dir": "./lora_output_better_prompt",
         "num_train_epochs": 3,
-        "max_steps": 10,
+        "max_steps": -1,
         "per_device_train_batch_size": 1,
         "per_device_eval_batch_size": 1,
         "gradient_accumulation_steps": 4,
@@ -24,10 +25,10 @@
         "bf16": null,
         "fp16": null,
         "logging_steps": 5,
-        "eval_strategy": "steps",
-        "eval_steps": 20,
-        "save_strategy": "steps",
-        "save_steps": 20,
+        "eval_strategy": "epoch",
+        "eval_steps": 1,
+        "save_strategy": "epoch",
+        "save_steps": 1,
         "save_total_limit": 2,
         "load_best_model_at_end": true,
         "report_to": "none",

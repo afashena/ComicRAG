@@ -4,6 +4,8 @@ from trl import SFTConfig
 import torch
 
 class Config(BaseModel):
+    model_path: str
+    train_dir: str
     lora_config: dict
     sft_config: dict
 

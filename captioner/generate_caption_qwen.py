@@ -5,8 +5,6 @@ import json
 import os
 from pathlib import Path
 import re
-import bitsandbytes
-import transformers
 import torch
 from dotenv import load_dotenv
 
@@ -14,21 +12,20 @@ from PIL import Image
 from pydantic import BaseModel
 from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
 from qwen_vl_utils import process_vision_info
-
-MODEL_PATH = Path(r"C:\Users\BabyBunny\Documents\Models\qwen2.5-vl-3b-instruct")
+from transformers import BitsAndBytesConfig
 
 
 # ── 1. Load model and processor (call once, reuse across many captions) ───────
 
 def load_qwen(
-    model_id: str = "Qwen/Qwen2.5-VL-3B-Instruct",
+    model_path: str,
     use_4bit: bool = True,
 ) -> tuple:
     """
     Load Qwen2.5-VL model and processor.
 
     Args:
-        model_id: HuggingFace model identifier.
+        model_path: Path to the local model directory.
         use_4bit: quantize to 4-bit for low VRAM GPUs (your GTX 1050).
                   Set False on Lambda Cloud where VRAM is not a constraint.
 
@@ -36,7 +33,7 @@ def load_qwen(
         (model, processor) tuple — pass both to caption_image().
     """
     processor = AutoProcessor.from_pretrained(
-        MODEL_PATH,
+        model_path,
         # Cap image token budget to keep VRAM manageable on small GPUs.
         # 256*28*28 = ~200k pixels minimum, 512*28*28 = ~400k pixels maximum.
         # Raise max_pixels on Lambda if you want more visual detail.
@@ -45,7 +42,6 @@ def load_qwen(
     )
 
     if use_4bit:
-        from transformers import BitsAndBytesConfig
         bnb_config = BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_quant_type="nf4",
@@ -54,14 +50,14 @@ def load_qwen(
             #llm_int8_enable_fp32_cpu_offload=True,
         )
         model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-            MODEL_PATH,
+            model_path,
             quantization_config=bnb_config,
             device_map="cuda:0",
             low_cpu_mem_usage=True,
         )
     else:
         model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-            MODEL_PATH,
+            model_path,
             torch_dtype=torch.bfloat16,
             device_map="cuda:0",
             attn_implementation="sdpa",

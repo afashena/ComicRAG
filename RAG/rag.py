@@ -23,7 +23,8 @@ from utils.util import ensure_dir, image_to_b64
 from vector_db.make_db import E5SmallTextEmbedder, QwenImageEmbedder, QwenTextEmbedder
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-print(torch.version)               # The CUDA version PyTorch was compiled against
+print(torch.__version__)               # The CUDA version PyTorch was compiled against
+print(torch.version.cuda)          # The CUDA version PyTorch is using at runtime
 print(torch.cuda.device_count())        # 0 means no GPUs detected
 
 # Retrieval sizes
@@ -116,64 +117,64 @@ def rerank_candidates(query: str, query_result: List[Dict]) -> List[Dict]:
     return ranked[:TOP_K]  # return top-k candidates with metadata for LLM input
 
 
-def download_jina_reranker_model():
-    """
-    Ensure the Jina Reranker model is downloaded locally.
-    """
+# def download_jina_reranker_model():
+#     """
+#     Ensure the Jina Reranker model is downloaded locally.
+#     """
 
-    # Download the model locally
-    model_name = "jinaai/jina-reranker-m0"
-    local_dir = os.path.join(os.getcwd(), "jina_models", "reranker")
-    os.makedirs(local_dir, exist_ok=True)
+#     # Download the model locally
+#     model_name = "jinaai/jina-reranker-m0"
+#     local_dir = os.path.join(os.getcwd(), "jina_models", "reranker")
+#     os.makedirs(local_dir, exist_ok=True)
 
-    print(f"Downloading {model_name} to {local_dir}...")
-    HubIO().fetch(uses=model_name, target=local_dir)
-    return local_dir
+#     print(f"Downloading {model_name} to {local_dir}...")
+#     HubIO().fetch(uses=model_name, target=local_dir)
+#     return local_dir
 
-def rerank_candidates_with_jina(query: str, query_result: List[Dict]) -> List[Dict]:
-    """
-    Rerank candidates using the Jina Reranker model locally.
+# def rerank_candidates_with_jina(query: str, query_result: List[Dict]) -> List[Dict]:
+#     """
+#     Rerank candidates using the Jina Reranker model locally.
 
-    Args:
-        query (str): The user's query.
-        query_result (List[Dict]): The initial retrieval results.
+#     Args:
+#         query (str): The user's query.
+#         query_result (List[Dict]): The initial retrieval results.
 
-    Returns:
-        List[Dict]: The reranked candidates.
-    """
-    # Ensure the model is downloaded locally
-    local_model_path = download_jina_reranker_model()
+#     Returns:
+#         List[Dict]: The reranked candidates.
+#     """
+#     # Ensure the model is downloaded locally
+#     local_model_path = download_jina_reranker_model()
 
-    # Create a Jina Flow with the local model
-    flow = Flow().add(uses=local_model_path)
+#     # Create a Jina Flow with the local model
+#     flow = Flow().add(uses=local_model_path)
 
-    # Extract candidates and metadata
-    candidates = query_result["documents"][0]  # list of captions
-    metadatas = query_result["metadatas"][0]  # metadata aligned with captions
+#     # Extract candidates and metadata
+#     candidates = query_result["documents"][0]  # list of captions
+#     metadatas = query_result["metadatas"][0]  # metadata aligned with captions
 
-    # Prepare documents for reranking
-    docs = DocumentArray()
-    for candidate, meta in zip(candidates, metadatas):
-        image_path = meta["image_path"]
-        try:
-            with open(image_path, "rb") as img_file:
-                image_data = img_file.read()
-            docs.append(Document(content=candidate, blob=image_data))
-        except FileNotFoundError:
-            print(f"[WARN] Image not found at path: {image_path}")
-            docs.append(Document(content=candidate))
+#     # Prepare documents for reranking
+#     docs = DocumentArray()
+#     for candidate, meta in zip(candidates, metadatas):
+#         image_path = meta["image_path"]
+#         try:
+#             with open(image_path, "rb") as img_file:
+#                 image_data = img_file.read()
+#             docs.append(Document(content=candidate, blob=image_data))
+#         except FileNotFoundError:
+#             print(f"[WARN] Image not found at path: {image_path}")
+#             docs.append(Document(content=candidate))
 
-    # Perform reranking
-    with flow:
-        reranked_docs = flow.post(on="/rerank", inputs=docs, parameters={"query": query})
+#     # Perform reranking
+#     with flow:
+#         reranked_docs = flow.post(on="/rerank", inputs=docs, parameters={"query": query})
 
-    # Combine reranked results with metadata
-    ranked = [
-        {"document": doc.content, "metadata": meta}
-        for doc, meta in zip(reranked_docs, metadatas)
-    ]
+#     # Combine reranked results with metadata
+#     ranked = [
+#         {"document": doc.content, "metadata": meta}
+#         for doc, meta in zip(reranked_docs, metadatas)
+#     ]
 
-    return ranked
+#     return ranked
 
 # -----------------------
 # Compose LLM prompt and query LLM (example using OpenAI Chat if available)

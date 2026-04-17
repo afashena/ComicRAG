@@ -30,7 +30,7 @@
             "args": ""
         },
         {
-            "name": "App",
+            "name": "Run RAG App",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/app.py",

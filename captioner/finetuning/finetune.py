@@ -3,28 +3,26 @@
 # uv add pillow torch torchvision
 
 import json
-import shutil
 from pathlib import Path
-from typing import Optional
-from enum import Enum
 from dotenv import load_dotenv
 
 import torch
-from datasets import Dataset
-from peft import LoraConfig, get_peft_model
+from peft import get_peft_model
 from PIL import Image
 from pydantic import BaseModel, Field
-from transformers import (
-    AutoProcessor,
-    AutoModelForImageTextToText,
-    BitsAndBytesConfig,
-)
-from trl import SFTConfig, SFTTrainer
+
+from trl import SFTTrainer
 import matplotlib.pyplot as plt
 from transformers import TrainerCallback, EarlyStoppingCallback
 
-from captioner.generate_caption_qwen import load_qwen  # reusing the same model loading code
 from config import Config
+from captioner.model import QwenCaptioner
+from captioner.finetuning.train_utils import get_training_test_splits
+
+def load_config(config_path: Path) -> dict:
+        with open(config_path, "r") as f:
+            config_dict = json.load(f)
+        return config_dict
 
 class LossPlotCallback(TrainerCallback):
     """
@@ -117,8 +115,7 @@ class LossPlotCallback(TrainerCallback):
 # ── 1. Model config — swap this block when moving to Lambda ──────────────────
 
 # Local test (your GTX 1050)
-MODEL_ID = "Qwen/Qwen2.5-VL-3B-Instruct"
-MODEL_PATH = Path(r"C:\Users\BabyBunny\Documents\Models\qwen2.5-vl-3b-instruct")
+#MODEL_ID = "Qwen/Qwen2.5-VL-3B-Instruct"
 USE_4BIT = True       # required on 3GB GPU
 
 # Lambda Cloud (uncomment when ready)
@@ -130,306 +127,159 @@ USE_4BIT = True       # required on 3GB GPU
 # MAX_STEPS = -1        # -1 = run full dataset for NUM_EPOCHS epochs
 
 class ComicPanelCaption(BaseModel):
-        description: str = Field(
-            description=("Without knowing or making up narrative elements which are not in the panel, describe the setting, characters, and events evident in this comic panel as if you were telling a prose narrative."))
+    description: str = Field(
+        description=("Without knowing or making up narrative elements which are not in the panel, describe the setting, characters, and events evident in this comic panel as if you were telling a prose narrative."))
 
 
-# ── 3. Dataset loading ────────────────────────────────────────────────────────
-
-def get_training_test_splits(train_dir: Path, save_test_images: bool = True) -> tuple[Path, Path]:
-
-    image_dir, label_dir = organize_train_set(train_dir)
-    dataset = load_dataset_from_dir(image_dir, label_dir)
-
-    # Train/validation split — hold out 10% for validation
-    split = dataset.train_test_split(test_size=0.1, seed=42)
-    train_dataset = split["train"]
-    eval_dataset = split["test"]
-    print(f"Train: {len(train_dataset)}, Eval: {len(eval_dataset)}")
-    print(train_dataset[0])  # sanity check
-
-    # Save test split images for inspection
-    if save_test_images:
-        test_images_dir = Path("./test_split_images")
-        test_images_dir.mkdir(parents=True, exist_ok=True)
-        for i, example in enumerate(eval_dataset):
-            shutil.copy(example["image_path"], test_images_dir / f"test_{i:03d}_{Path(example['image_path']).name}")
-        print(f"Test split images saved to {test_images_dir.absolute()}")
-
-    return train_dataset, eval_dataset
-
-def organize_train_set(train_dir: Path) -> tuple[Path, Path]:
-    """
-    Organize your training data into the expected structure:
-    train_dir/
-        images/
-            0_0.jpg
-            0_1.jpg
-            ...
-        labels/
-            0_0.txt
-            0_1.txt
-            ...
-    """
-    images_dir = train_dir.parent / "images"
-    labels_dir = train_dir.parent / "labels"
-    images_dir.mkdir(parents=True, exist_ok=True)
-    labels_dir.mkdir(parents=True, exist_ok=True)
-
-    # Move image files to images/ and text files to labels/
-    for chunk in train_dir.iterdir():
-        for file in chunk.iterdir():
-            if file.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".JPG", ".JPEG"}:
-                shutil.move(str(file), str(images_dir / file.name))
-            elif file.suffix.lower() == ".txt":
-                shutil.move(str(file), str(labels_dir / file.name))
-
-    return images_dir, labels_dir
-
-def load_dataset_from_dir(
-    image_dir: str,
-    label_dir: str,
-) -> Dataset:
-    """
-    Pairs each image with its text label file.
-    Expects image_dir/*.jpg (or png etc) and label_dir/*.txt
-    with matching stems (e.g. 9_4.jpg <-> 9_4.txt).
-    """
-    image_dir = Path(image_dir)
-    label_dir = Path(label_dir)
-    extensions = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".JPG", ".JPEG"}
-
-    examples = []
-    for image_path in sorted(image_dir.iterdir()):
-        if image_path.suffix.lower() not in extensions:
-            continue
-        label_path = label_dir / (image_path.stem + ".txt")
-        if not label_path.exists():
-            print(f"  Warning: no label found for {image_path.name}, skipping.")
-            continue
-        with open(label_path) as f:
-            label = f.read().strip()
-        # Validate against Pydantic schema — catches label errors early
-        # try:
-        #     ComicPanelCaption.model_validate(label)
-        # except Exception as e:
-        #     print(f"  Warning: invalid label for {image_path.name}: {e}, skipping.")
-        #     continue
-        examples.append({
-            "image_path": str(image_path),
-            "label": label,
-            "text": label,  # SFTTrainer expects a 'text' key
-        })
-
-    print(f"Loaded {len(examples)} valid labeled examples.")
-    return Dataset.from_list(examples)
-
-
-# ── 4. Collator — converts raw examples into model inputs ────────────────────
-
-SYSTEM_PROMPT = (
-    "You are a comic panel captioning assistant. "
-    "Analyze the panel and respond with a JSON object matching the schema exactly. "
-    "Return only valid JSON. No markdown, no explanation, no code fences."
-)
-
-
-def make_collator(processor, device):
-    """
-    Returns a collate_fn that:
-    - Opens each image
-    - Builds the chat message structure
-    - Applies the chat template
-    - Returns tensors ready for the model
-    """
-    def collate_fn(examples):
-        images = []
-        texts = []
-
-        for example in examples:
-            image = Image.open(example["image_path"]).convert("RGB")
-            image.thumbnail((512, 512))
-            images.append(image)
-
-            messages = [
-                {
-                    "role": "system",
-                    "content": SYSTEM_PROMPT,
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image", "image": image},
-                        {"type": "text", "text": "Caption this comic panel."},
-                    ],
-                },
-                {
-                    "role": "assistant",
-                    # The ground truth label — what the model learns to produce
-                    "content": example["label"],
-                },
-            ]
-
-            text = processor.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=False,  # False during training
-            )
-            texts.append(text)
-
-        # Process all images and texts together
-        batch = processor(
-            text=texts,
-            images=images,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=2048,
+class QwenTrainer(QwenCaptioner):
+    def __init__(self, config: Config, system_prompt: str, user_prompt: str, schema: BaseModel | None):
+        super().__init__(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            schema=schema,
+            config=config,
         )
 
-        # Labels are the same as input_ids for causal LM training
-        # SFTTrainer will mask the prompt tokens automatically
-        batch["labels"] = batch["input_ids"].clone()
-        
-        # Do NOT move to device here — let the trainer handle device placement
-        # Moving tensors to GPU in collate_fn causes memory pinning conflicts
-        return batch
+    def make_collator(self):
+        """
+        Returns a collate_fn that:
+        - Opens each image
+        - Builds the chat message structure
+        - Applies the chat template
+        - Returns tensors ready for the model
+        """
+        def collate_fn(examples):
+            images = []
+            texts = []
 
-    return collate_fn
+            for example in examples:
+                image = Image.open(example["image_path"]).convert("RGB")
+                image.thumbnail((512, 512))
+                images.append(image)
 
+                messages = self.get_structured_prompt(image=image, gt_label=example["label"])
 
-# ── 5. Main training script ───────────────────────────────────────────────────
+                text = self.processor.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=False,  # False during training
+                )
+                texts.append(text)
 
-def load_config(config_path: Path) -> dict:
-    with open(config_path, "r") as f:
-        config_dict = json.load(f)
-    return config_dict
+            # Process all images and texts together
+            batch = self.processor(
+                text=texts,
+                images=images,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=2048,
+            )
 
-def train(
-    train_dir: Path,
-    config: Config,
-    output_dir: str = "./lora_output",
-):
-    # Print useful system info
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Using device: {device}")
-    if device == "cuda":
-        print(f"GPU: {torch.cuda.get_device_name(0)}")
-        print(f"VRAM free: {torch.cuda.mem_get_info()[0] / 1024**3:.1f} GB")
+            # Labels are the same as input_ids for causal LM training
+            # SFTTrainer will mask the prompt tokens automatically
+            batch["labels"] = batch["input_ids"].clone()
+            
+            # Do NOT move to device here — let the trainer handle device placement
+            # Moving tensors to GPU in collate_fn causes memory pinning conflicts
+            return batch
 
-    # ── Preprocess and load dataset ──────────────────────────────────────────────────────────
-    train_dataset, eval_dataset = get_training_test_splits(train_dir)
+        return collate_fn
 
-    # # ── Load model ────────────────────────────────────────────────────────────
-    # if USE_4BIT:
-    #     bnb_config = BitsAndBytesConfig(
-    #         load_in_4bit=True,
-    #         bnb_4bit_quant_type="nf4",
-    #         bnb_4bit_compute_dtype=torch.bfloat16,
-    #         bnb_4bit_use_double_quant=True,
-    #         #llm_int8_enable_fp32_cpu_offload=True,
-    #     )
-    #     model = AutoModelForImageTextToText.from_pretrained(
-    #         MODEL_PATH,
-    #         quantization_config=bnb_config,
-    #         device_map="cuda:0",
-    #         low_cpu_mem_usage=True,
-    #         trust_remote_code=True,
-    #     )
-    # else:
-    #     # Lambda Cloud path — full bfloat16, no quantization
-    #     model = AutoModelForImageTextToText.from_pretrained(
-    #         MODEL_PATH,
-    #         torch_dtype=torch.bfloat16,
-    #         device_map="cuda:0",
-    #         trust_remote_code=True,
-    #     ).to(device)
+    def train(
+            self,
+        ):
+        # Print useful system info
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        print(f"Using device: {device}")
+        if device == "cuda":
+            print(f"GPU: {torch.cuda.get_device_name(0)}")
+            print(f"VRAM free: {torch.cuda.mem_get_info()[0] / 1024**3:.1f} GB")
 
-    model, processor = load_qwen()
+        # ── Preprocess and load dataset ──────────────────────────────────────────────────────────
+        train_dataset, eval_dataset = get_training_test_splits(Path(self.config.train_dir))
 
-    model.config.use_cache = False  # required for gradient checkpointing
+        # # ── Load model ────────────────────────────────────────────────────────────
+        # if USE_4BIT:
+        #     bnb_config = BitsAndBytesConfig(
+        #         load_in_4bit=True,
+        #         bnb_4bit_quant_type="nf4",
+        #         bnb_4bit_compute_dtype=torch.bfloat16,
+        #         bnb_4bit_use_double_quant=True,
+        #         #llm_int8_enable_fp32_cpu_offload=True,
+        #     )
+        #     model = AutoModelForImageTextToText.from_pretrained(
+        #         MODEL_PATH,
+        #         quantization_config=bnb_config,
+        #         device_map="cuda:0",
+        #         low_cpu_mem_usage=True,
+        #         trust_remote_code=True,
+        #     )
+        # else:
+        #     # Lambda Cloud path — full bfloat16, no quantization
+        #     model = AutoModelForImageTextToText.from_pretrained(
+        #         MODEL_PATH,
+        #         torch_dtype=torch.bfloat16,
+        #         device_map="cuda:0",
+        #         trust_remote_code=True,
+        #     ).to(device)
 
-    # ── LoRA config ───────────────────────────────────────────────────────────
-    lora_config = config.build_lora()
+        self.load_qwen()
 
-    model = get_peft_model(model, lora_config)
-    model.print_trainable_parameters()
+        self.model.config.use_cache = False  # required for gradient checkpointing
 
-    # ── Training config ───────────────────────────────────────────────────────
-    sft_config = config.build_sft()
+        # ── LoRA config ───────────────────────────────────────────────────────────
+        lora_config = config.build_lora()
 
-    loss_callback = LossPlotCallback(output_dir=output_dir)
+        self.model = get_peft_model(self.model, lora_config)
+        self.model.print_trainable_parameters()
 
-    # ── Trainer ───────────────────────────────────────────────────────────────
-    trainer = SFTTrainer(
-        model=model,
-        args=sft_config,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
-        data_collator=make_collator(processor, device),
-        callbacks=[EarlyStoppingCallback(
-                early_stopping_patience=5,
-                early_stopping_threshold=0.001,)
-                ,loss_callback],
-    )
+        # ── Training config ───────────────────────────────────────────────────────
+        sft_config = config.build_sft()
 
-    # ── Train ─────────────────────────────────────────────────────────────────
-    print("\nStarting training...")
-    trainer.train()
-    loss_callback._save_plot()  # Save the loss plot at the end of training
+        loss_callback = LossPlotCallback(output_dir=self.config.sft_config["output_dir"])
 
-    # ── Save LoRA adapter weights only (not the full model) ──────────────────
-    adapter_path = Path(output_dir) / "final_adapter"
-    model.save_pretrained(adapter_path)
-    processor.save_pretrained(adapter_path)
-    print(f"\nLoRA adapter saved to {adapter_path}")
-    print("Training complete.")
+        # ── Trainer ───────────────────────────────────────────────────────────────
+        trainer = SFTTrainer(
+            model=self.model,
+            args=sft_config,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+            data_collator=self.make_collator(),
+            callbacks=[EarlyStoppingCallback(
+                    early_stopping_patience=5,
+                    early_stopping_threshold=0.001,)
+                    ,loss_callback],
+        )
 
+        # ── Train ─────────────────────────────────────────────────────────────────
+        print("\nStarting training...")
+        trainer.train()
+        loss_callback._save_plot()  # Save the loss plot at the end of training
 
-# ── 6. Loading the fine-tuned model for inference ────────────────────────────
+        # ── Save LoRA adapter weights only (not the full model) ──────────────────
+        adapter_path = Path(self.config.sft_config["output_dir"]) / "final_adapter"
+        self.model.save_pretrained(adapter_path)
+        self.processor.save_pretrained(adapter_path)
+        print(f"\nLoRA adapter saved to {adapter_path}")
+        print("Training complete.")
 
-def load_finetuned_model(adapter_path: str):
-    """
-    Load the base model and apply the saved LoRA adapter for inference.
-    Use this after training to test your fine-tuned model.
-    """
-    from peft import PeftModel
-
-    processor = AutoProcessor.from_pretrained(adapter_path, trust_remote_code=True)
-
-    # Use 4-bit quantization to match baseline model and save memory
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16,
-        bnb_4bit_use_double_quant=True,
-    )
-
-    base_model = AutoModelForImageTextToText.from_pretrained(
-        MODEL_PATH,
-        quantization_config=bnb_config,
-        device_map="cuda:0",
-        low_cpu_mem_usage=True,
-        trust_remote_code=True,
-    )
-
-    model = PeftModel.from_pretrained(base_model, adapter_path)
-    
-    # Merge LoRA adapters into the base model for faster inference
-    model = model.merge_and_unload()
-    
-    model.eval()
-
-    return model, processor
 
 
 # ── 7. Entry point ────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     load_dotenv()
+
     config = Config.model_validate(load_config(Path("./config.json")))
-    train(
-        train_dir=Path(r"C:\Users\BabyBunny\Documents\Data\test_finetune\merged_train"),
-        config=config,
-        output_dir="./lora_output",
-    )
+
+    system_prompt = (
+            "You are a comic panel captioning assistant for golden age Western comics. "
+            "Analyze the panel and respond without making up any details not evident in the image. "
+        )
+    
+    user_prompt = ("Without knowing or making up narrative elements which are not in the panel, "
+                    "describe the setting, characters, and events evident in this comic panel as if you were telling a prose narrative.")
+    
+    captioner_trainer = QwenTrainer(config=config, system_prompt=system_prompt, user_prompt=user_prompt, schema=None)
+    captioner_trainer.train()
